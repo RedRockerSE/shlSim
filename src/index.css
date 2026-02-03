@@ -1,0 +1,62 @@
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;600;700&display=swap');
+
+:root {
+  font-family: 'Space Grotesk', system-ui, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  color: #eef2f3;
+  background-color: #0f141b;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+
+  --bg: #0f141b;
+  --panel: rgba(19, 27, 37, 0.92);
+  --panel-accent: rgba(29, 41, 54, 0.85);
+  --border: rgba(255, 255, 255, 0.08);
+  --text: #eef2f3;
+  --muted: rgba(238, 242, 243, 0.7);
+  --accent: #5eead4;
+  --shadow-soft: 0 20px 60px rgba(9, 12, 16, 0.5);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: radial-gradient(circle at top, rgba(94, 234, 212, 0.12), transparent 55%),
+    radial-gradient(circle at 20% 20%, rgba(45, 212, 191, 0.12), transparent 45%),
+    var(--bg);
+  color: var(--text);
+}
+
+#root {
+  max-width: 1300px;
+  margin: 0 auto;
+  padding: 32px 24px 60px;
+}
+
+h1,
+h2,
+h3 {
+  margin: 0 0 12px 0;
+}
+
+input,
+select,
+button {
+  font-family: inherit;
+}
+
+code {
+  font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, SFMono-Regular, Menlo, Monaco,
+    Consolas, 'Liberation Mono', 'Courier New', monospace;
+}
+
+a {
+  color: inherit;
+}
