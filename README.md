@@ -1,16 +1,58 @@
-# React + Vite
+# SHL Standings Lab
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Simulate SHL standings with deterministic outcomes and Monte Carlo simulations. Supports manual input, CSV import/export, and cloud persistence with Supabase.
 
-Currently, two official plugins are available:
+## Quick start
+1. Install dependencies:
+```bash
+npm install
+```
+2. Add Supabase env vars (see `.env.example`).
+3. Run locally:
+```bash
+npm run dev
+```
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+## Supabase setup
+1. Create a Supabase project.
+2. In Supabase SQL Editor, run the schema in `supabase/schema.sql`.
+3. In Auth settings:
+   - Enable email magic links.
+   - Add your local dev URL and GitHub Pages URL to the redirect allowlist.
 
-## React Compiler
+## Environment variables
+Create a `.env` file locally (not committed) with:
+```
+VITE_SUPABASE_URL=your_project_url
+VITE_SUPABASE_ANON_KEY=your_anon_key
+```
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+For GitHub Pages, set these as build-time env vars in your deployment workflow.
 
-## Expanding the ESLint configuration
+## GitHub Pages deployment
+- The workflow in `.github/workflows/deploy.yml` builds and publishes `dist` on every push to `main`.
+- Add repository secrets:
+  - `VITE_SUPABASE_URL`
+  - `VITE_SUPABASE_ANON_KEY`
+- Make sure your Supabase Auth redirect URLs include your GitHub Pages site.
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+## Cloud save and sharing
+- Sign in with your email to create your personal table.
+- Click "Save to cloud" to persist changes.
+- Click "Create share link" to generate a public read-only URL.
+- Anyone with `?share=slug` can view the table read-only.
+
+## CSV formats
+Teams CSV columns:
+```
+name,gp,pts,rw,row,gf,ga
+```
+
+Games CSV columns:
+```
+home,away,outcome,probHome
+```
+
+## Notes
+- Public read-only access is implemented via a Supabase RPC (`get_table_by_slug`).
+- Only the owner can edit or save.

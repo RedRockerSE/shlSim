@@ -1,5 +1,6 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import './App.css'
+import { supabase } from './supabaseClient'
 
 const TEAM_COUNT_DEFAULT = 14
 
@@ -146,6 +147,10 @@ const buildRankMap = (standings) => {
 }
 
 function App() {
+  const [shareSlug] = useState(() => {
+    const params = new URLSearchParams(window.location.search)
+    return params.get('share')?.trim() ?? ''
+  })
   const [teams, setTeams] = useState(createPlaceholderTeams())
   const [games, setGames] = useState([])
   const [targetTeamId, setTargetTeamId] = useState(teams[0]?.id ?? '')
@@ -158,6 +163,20 @@ function App() {
   const [playInEnd, setPlayInEnd] = useState(10)
   const [relegationStart, setRelegationStart] = useState(13)
   const [simulation, setSimulation] = useState(null)
+  const [session, setSession] = useState(null)
+  const [authEmail, setAuthEmail] = useState('')
+  const [publicSlug, setPublicSlug] = useState('')
+  const [cloudMessage, setCloudMessage] = useState('')
+  const [cloudBusy, setCloudBusy] = useState(false)
+  const [lastSavedSnapshot, setLastSavedSnapshot] = useState('')
+  const [toast, setToast] = useState(null)
+
+  const isReadOnly = Boolean(shareSlug)
+  const hasSupabaseConfig = Boolean(
+    import.meta.env.VITE_SUPABASE_URL && import.meta.env.VITE_SUPABASE_ANON_KEY
+  )
+  const currentSnapshot = useMemo(() => JSON.stringify({ teams, games }), [teams, games])
+  const hasUnsavedChanges = Boolean(lastSavedSnapshot) && currentSnapshot !== lastSavedSnapshot
 
   const deterministicStandings = useMemo(
     () => computeDeterministicStandings(teams, games, tiebreakRule),
@@ -166,7 +185,120 @@ function App() {
 
   const targetTeam = teams.find((team) => team.id === targetTeamId)
 
+  const createPayload = () => ({
+    owner_id: session?.user?.id ?? null,
+    name: 'My SHL Table',
+    teams,
+    games,
+  })
+
+  const updateFromRemote = (data) => {
+    if (!data) return
+    if (Array.isArray(data.teams) && data.teams.length > 0) {
+      setTeams(data.teams)
+      setTargetTeamId(data.teams[0]?.id ?? '')
+    }
+    if (Array.isArray(data.games)) {
+      setGames(data.games)
+    }
+    if (data.public_slug) {
+      setPublicSlug(data.public_slug)
+    }
+    if (Array.isArray(data.teams) || Array.isArray(data.games)) {
+      const snapshot = JSON.stringify({
+        teams: Array.isArray(data.teams) ? data.teams : [],
+        games: Array.isArray(data.games) ? data.games : [],
+      })
+      setLastSavedSnapshot(snapshot)
+    }
+  }
+
+  const pushToast = (message, tone = 'info') => {
+    setToast({ message, tone })
+    window.clearTimeout(window.__shlToastTimer)
+    window.__shlToastTimer = window.setTimeout(() => {
+      setToast(null)
+    }, 2400)
+  }
+
+  useEffect(() => {
+    if (!hasSupabaseConfig) return
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session ?? null)
+    })
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      setSession(nextSession)
+    })
+    return () => subscription.unsubscribe()
+  }, [hasSupabaseConfig])
+
+  useEffect(() => {
+    if (!shareSlug || !hasSupabaseConfig) return
+    const loadShared = async () => {
+      setCloudBusy(true)
+      setCloudMessage('')
+      const { data, error } = await supabase.rpc('get_table_by_slug', {
+        slug: shareSlug,
+      })
+      if (error) {
+        setCloudMessage('Could not load shared table. Check the link and try again.')
+        pushToast('Could not load shared table.', 'error')
+      } else {
+        const row = Array.isArray(data) ? data[0] : data
+        updateFromRemote(row)
+        setCloudMessage('Viewing shared table (read-only).')
+        pushToast('Loaded shared table.', 'success')
+      }
+      setCloudBusy(false)
+    }
+    loadShared()
+  }, [shareSlug, hasSupabaseConfig])
+
+  useEffect(() => {
+    if (!session || shareSlug || !hasSupabaseConfig) return
+    const loadUserTable = async () => {
+      setCloudBusy(true)
+      setCloudMessage('')
+      const { data, error } = await supabase
+        .from('tables')
+        .select('id, public_slug, name, teams, games, updated_at')
+        .eq('owner_id', session.user.id)
+        .maybeSingle()
+      if (error) {
+        setCloudMessage('Could not load your saved table.')
+        pushToast('Could not load your table.', 'error')
+        setCloudBusy(false)
+        return
+      }
+      if (data) {
+        updateFromRemote(data)
+        setCloudMessage('Loaded your saved table.')
+        pushToast('Loaded your saved table.', 'success')
+      } else {
+        const payload = createPayload()
+        const { data: created, error: insertError } = await supabase
+          .from('tables')
+          .insert(payload)
+          .select('id, public_slug, name, teams, games, updated_at')
+          .single()
+        if (insertError) {
+          setCloudMessage('Could not create your table.')
+          pushToast('Could not create your table.', 'error')
+        } else {
+          updateFromRemote(created)
+          setCloudMessage('Created your first saved table.')
+          pushToast('Created your first table.', 'success')
+        }
+      }
+      setCloudBusy(false)
+    }
+    loadUserTable()
+  }, [session, shareSlug, hasSupabaseConfig])
+
   const handleAddTeam = () => {
+    if (isReadOnly) return
     setTeams((prev) => {
       const next = [
         ...prev,
@@ -189,6 +321,7 @@ function App() {
   }
 
   const handleRemoveTeam = (teamId) => {
+    if (isReadOnly) return
     setTeams((prev) => prev.filter((team) => team.id !== teamId))
     setGames((prev) => prev.filter((game) => game.homeId !== teamId && game.awayId !== teamId))
     if (teamId === targetTeamId) {
@@ -198,6 +331,7 @@ function App() {
   }
 
   const handleResetTeams = () => {
+    if (isReadOnly) return
     const placeholders = createPlaceholderTeams()
     setTeams(placeholders)
     setTargetTeamId(placeholders[0]?.id ?? '')
@@ -205,22 +339,26 @@ function App() {
   }
 
   const handleTeamChange = (teamId, field, value) => {
+    if (isReadOnly) return
     setTeams((prev) =>
       prev.map((team) => (team.id === teamId ? { ...team, [field]: value } : team))
     )
   }
 
   const handleAddGame = () => {
+    if (isReadOnly) return
     setGames((prev) => [...prev, createEmptyGame(teams)])
   }
 
   const handleGameChange = (gameId, field, value) => {
+    if (isReadOnly) return
     setGames((prev) =>
       prev.map((game) => (game.id === gameId ? { ...game, [field]: value } : game))
     )
   }
 
   const handleRemoveGame = (gameId) => {
+    if (isReadOnly) return
     setGames((prev) => prev.filter((game) => game.id !== gameId))
   }
 
@@ -406,6 +544,114 @@ function App() {
     event.target.value = ''
   }
 
+  const handleSaveToCloud = async () => {
+    if (!hasSupabaseConfig) {
+      setCloudMessage('Supabase is not configured yet.')
+      pushToast('Supabase is not configured yet.', 'error')
+      return
+    }
+    if (!session) {
+      setCloudMessage('Sign in first to save.')
+      pushToast('Sign in first to save.', 'error')
+      return
+    }
+    setCloudBusy(true)
+    setCloudMessage('')
+    const payload = createPayload()
+    const { data, error } = await supabase
+      .from('tables')
+      .upsert(payload, { onConflict: 'owner_id' })
+      .select('id, public_slug, name, teams, games, updated_at')
+      .single()
+    if (error) {
+      setCloudMessage('Save failed. Try again.')
+      pushToast('Save failed. Try again.', 'error')
+    } else {
+      updateFromRemote(data)
+      setLastSavedSnapshot(JSON.stringify({ teams, games }))
+      setCloudMessage('Saved to cloud.')
+      pushToast('Saved to cloud.', 'success')
+    }
+    setCloudBusy(false)
+  }
+
+  const handleGenerateShare = async () => {
+    if (!hasSupabaseConfig) {
+      setCloudMessage('Supabase is not configured yet.')
+      pushToast('Supabase is not configured yet.', 'error')
+      return
+    }
+    if (!session) {
+      setCloudMessage('Sign in first to create a share link.')
+      pushToast('Sign in first to create a share link.', 'error')
+      return
+    }
+    setCloudBusy(true)
+    setCloudMessage('')
+    const slug = publicSlug || (crypto?.randomUUID?.() ?? `${makeId()}${makeId()}${makeId()}`)
+    const { data, error } = await supabase
+      .from('tables')
+      .update({ public_slug: slug })
+      .eq('owner_id', session.user.id)
+      .select('public_slug')
+      .single()
+    if (error) {
+      setCloudMessage('Could not create share link.')
+      pushToast('Could not create share link.', 'error')
+    } else {
+      setPublicSlug(data.public_slug)
+      setCloudMessage('Share link ready.')
+      pushToast('Share link ready.', 'success')
+    }
+    setCloudBusy(false)
+  }
+
+  const handleCopyShare = async () => {
+    if (!publicSlug) return
+    const shareUrl = `${window.location.origin}${window.location.pathname}?share=${publicSlug}`
+    try {
+      await navigator.clipboard.writeText(shareUrl)
+      setCloudMessage('Share link copied to clipboard.')
+      pushToast('Share link copied.', 'success')
+    } catch (error) {
+      setCloudMessage('Could not copy. Select the link and copy manually.')
+      pushToast('Copy failed. Select the link manually.', 'error')
+    }
+  }
+
+  const handleSignIn = async () => {
+    if (!hasSupabaseConfig) {
+      setCloudMessage('Supabase is not configured yet.')
+      pushToast('Supabase is not configured yet.', 'error')
+      return
+    }
+    if (!authEmail) {
+      setCloudMessage('Enter an email address.')
+      pushToast('Enter an email address.', 'error')
+      return
+    }
+    setCloudBusy(true)
+    setCloudMessage('')
+    const { error } = await supabase.auth.signInWithOtp({
+      email: authEmail,
+      options: { emailRedirectTo: window.location.href.split('?')[0] },
+    })
+    if (error) {
+      setCloudMessage('Could not send magic link.')
+      pushToast('Could not send magic link.', 'error')
+    } else {
+      setCloudMessage('Check your email for the magic link.')
+      pushToast('Magic link sent.', 'success')
+    }
+    setCloudBusy(false)
+  }
+
+  const handleSignOut = async () => {
+    await supabase.auth.signOut()
+    setSession(null)
+    setPublicSlug('')
+  }
+
   const runSimulation = () => {
     const safeIterations = clamp(num(iterations), 100, 20000)
     const summaryMap = new Map()
@@ -475,6 +721,14 @@ function App() {
 
   return (
     <div className="app">
+      {toast ? (
+        <div className={`toast ${toast.tone}`}>
+          <span>{toast.message}</span>
+          <button type="button" onClick={() => setToast(null)}>
+            Dismiss
+          </button>
+        </div>
+      ) : null}
       <header className="hero">
         <div>
           <p className="eyebrow">SHL Standings Lab</p>
@@ -498,6 +752,62 @@ function App() {
             ))}
           </select>
           <p className="hint">Rank distributions and highlights will track this team.</p>
+          <div className="cloud-panel">
+            <div className="cloud-header">
+              <span>Cloud save</span>
+              {isReadOnly ? <span className="chip">Read-only</span> : null}
+            </div>
+            {!hasSupabaseConfig ? (
+              <p className="hint">
+                Supabase is not configured. Add your project URL and anon key to the Vite env vars.
+              </p>
+            ) : null}
+            {cloudMessage ? <p className="hint">{cloudMessage}</p> : null}
+            {isReadOnly ? null : session ? (
+              <div className="cloud-actions">
+                {!lastSavedSnapshot ? (
+                  <p className="hint">Not saved yet.</p>
+                ) : hasUnsavedChanges ? (
+                  <p className="hint">Unsaved changes.</p>
+                ) : (
+                  <p className="hint">All changes saved.</p>
+                )}
+                <button type="button" className="primary" onClick={handleSaveToCloud}>
+                  Save to cloud
+                </button>
+                <button type="button" className="ghost" onClick={handleGenerateShare}>
+                  {publicSlug ? 'Refresh share link' : 'Create share link'}
+                </button>
+                <button type="button" className="ghost" onClick={handleSignOut}>
+                  Sign out
+                </button>
+                {publicSlug ? (
+                  <>
+                    <input
+                      readOnly
+                      value={`${window.location.origin}${window.location.pathname}?share=${publicSlug}`}
+                    />
+                    <button type="button" className="ghost" onClick={handleCopyShare}>
+                      Copy share link
+                    </button>
+                  </>
+                ) : null}
+              </div>
+            ) : (
+              <div className="cloud-actions">
+                <input
+                  type="email"
+                  placeholder="Email address"
+                  value={authEmail}
+                  onChange={(event) => setAuthEmail(event.target.value)}
+                />
+                <button type="button" className="primary" onClick={handleSignIn}>
+                  Send magic link
+                </button>
+              </div>
+            )}
+            {cloudBusy ? <p className="hint">Working...</p> : null}
+          </div>
         </div>
       </header>
 
@@ -507,7 +817,7 @@ function App() {
           <div className="panel-actions">
             <label className="file-button">
               Import CSV
-              <input type="file" accept=".csv" onChange={handleImportTeams} />
+              <input type="file" accept=".csv" onChange={handleImportTeams} disabled={isReadOnly} />
             </label>
             <button type="button" className="ghost" onClick={handleDownloadTeamsTemplate}>
               Download template
@@ -515,10 +825,10 @@ function App() {
             <button type="button" className="ghost" onClick={handleExportTeams}>
               Export CSV
             </button>
-            <button type="button" className="ghost" onClick={handleResetTeams}>
+            <button type="button" className="ghost" onClick={handleResetTeams} disabled={isReadOnly}>
               Reset to 14 placeholders
             </button>
-            <button type="button" className="primary" onClick={handleAddTeam}>
+            <button type="button" className="primary" onClick={handleAddTeam} disabled={isReadOnly}>
               Add team
             </button>
           </div>
@@ -544,47 +854,55 @@ function App() {
                 value={team.name}
                 onChange={(event) => handleTeamChange(team.id, 'name', event.target.value)}
                 placeholder="Team name"
+                disabled={isReadOnly}
               />
               <input
                 type="number"
                 min="0"
                 value={team.gp}
                 onChange={(event) => handleTeamChange(team.id, 'gp', event.target.value)}
+                disabled={isReadOnly}
               />
               <input
                 type="number"
                 min="0"
                 value={team.pts}
                 onChange={(event) => handleTeamChange(team.id, 'pts', event.target.value)}
+                disabled={isReadOnly}
               />
               <input
                 type="number"
                 min="0"
                 value={team.rw}
                 onChange={(event) => handleTeamChange(team.id, 'rw', event.target.value)}
+                disabled={isReadOnly}
               />
               <input
                 type="number"
                 min="0"
                 value={team.row}
                 onChange={(event) => handleTeamChange(team.id, 'row', event.target.value)}
+                disabled={isReadOnly}
               />
               <input
                 type="number"
                 min="0"
                 value={team.gf}
                 onChange={(event) => handleTeamChange(team.id, 'gf', event.target.value)}
+                disabled={isReadOnly}
               />
               <input
                 type="number"
                 min="0"
                 value={team.ga}
                 onChange={(event) => handleTeamChange(team.id, 'ga', event.target.value)}
+                disabled={isReadOnly}
               />
               <button
                 type="button"
                 className="ghost"
                 onClick={() => handleRemoveTeam(team.id)}
+                disabled={isReadOnly}
               >
                 Remove
               </button>
@@ -599,7 +917,7 @@ function App() {
           <div className="panel-actions">
             <label className="file-button">
               Import CSV
-              <input type="file" accept=".csv" onChange={handleImportGames} />
+              <input type="file" accept=".csv" onChange={handleImportGames} disabled={isReadOnly} />
             </label>
             <button type="button" className="ghost" onClick={handleDownloadGamesTemplate}>
               Download template
@@ -607,7 +925,7 @@ function App() {
             <button type="button" className="ghost" onClick={handleExportGames}>
               Export CSV
             </button>
-            <button type="button" className="primary" onClick={handleAddGame}>
+            <button type="button" className="primary" onClick={handleAddGame} disabled={isReadOnly}>
               Add game
             </button>
           </div>
@@ -629,6 +947,7 @@ function App() {
               <select
                 value={game.homeId}
                 onChange={(event) => handleGameChange(game.id, 'homeId', event.target.value)}
+                disabled={isReadOnly}
               >
                 {teams.map((team) => (
                   <option key={team.id} value={team.id}>
@@ -639,6 +958,7 @@ function App() {
               <select
                 value={game.awayId}
                 onChange={(event) => handleGameChange(game.id, 'awayId', event.target.value)}
+                disabled={isReadOnly}
               >
                 {teams.map((team) => (
                   <option key={team.id} value={team.id}>
@@ -649,6 +969,7 @@ function App() {
               <select
                 value={game.outcome}
                 onChange={(event) => handleGameChange(game.id, 'outcome', event.target.value)}
+                disabled={isReadOnly}
               >
                 <option value="TBD">TBD</option>
                 <option value="H_REG">Home regulation win</option>
@@ -664,8 +985,14 @@ function App() {
                 onChange={(event) =>
                   handleGameChange(game.id, 'probHome', num(event.target.value) / 100)
                 }
+                disabled={isReadOnly}
               />
-              <button type="button" className="ghost" onClick={() => handleRemoveGame(game.id)}>
+              <button
+                type="button"
+                className="ghost"
+                onClick={() => handleRemoveGame(game.id)}
+                disabled={isReadOnly}
+              >
                 Remove
               </button>
             </div>
